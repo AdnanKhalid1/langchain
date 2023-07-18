@@ -117,6 +117,7 @@ class Chroma(VectorStore):
         self.override_relevance_score_fn = relevance_score_fn
 
     @xor_args(("query_texts", "query_embeddings"))
+
     def __query_collection(
         self,
         query_texts: Optional[List[str]] = None,
@@ -124,7 +125,7 @@ class Chroma(VectorStore):
         n_results: int = 4,
         where: Optional[Dict[str, str]] = None,
         **kwargs: Any,
-    ) -> List[Document]:
+    ) -> List[Document]:    
         """Query the chroma collection."""
         try:
             import chromadb  # noqa: F401
@@ -133,13 +134,15 @@ class Chroma(VectorStore):
                 "Could not import chromadb python package. "
                 "Please install it with `pip install chromadb`."
             )
-        return self._collection.query(
-            query_texts=query_texts,
-            query_embeddings=query_embeddings,
-            n_results=n_results,
-            where=where,
-            **kwargs,
-        )
+        if query_texts is not None:
+            documents = [{"content": query} for query in query_texts]
+            if self._embedding_function is not None:
+                for doc in documents:
+                    doc["embedding"] = self._embedding_function.embed_document(doc["content"])
+            return self._collection.query(documents=documents, n_results=n_results, where=where, **kwargs)
+        else:
+            documents = [{"embedding": embedding} for embedding in query_embeddings]
+            return self._collection.query(documents=documents, n_results=n_results, where=where, **kwargs)
 
     def add_texts(
         self,
@@ -194,6 +197,14 @@ class Chroma(VectorStore):
 
         if texts:
             self._collection.upsert(embeddings=embeddings, documents=texts, ids=ids)
+        
+        documents = [{"content": text, "id": id_, "metadata": metadata} for text, id_, metadata in zip(texts, ids, metadatas)]
+        if self._embedding_function is not None:
+            for doc in documents:
+                doc["embedding"] = self._embedding_function.embed_document(doc["content"])
+        
+        if documents:
+            self._collection.add(documents=documents)
         return ids
 
     def similarity_search(
@@ -436,17 +447,15 @@ class Chroma(VectorStore):
                      Defaults to `["metadatas", "documents"]`. Optional.
         """
         kwargs = {
-            "ids": ids,
+            "document_ids": ids,
             "where": where,
             "limit": limit,
             "offset": offset,
             "where_document": where_document,
+            "include": include,
         }
-
-        if include is not None:
-            kwargs["include"] = include
-
         return self._collection.get(**kwargs)
+        
 
     def persist(self) -> None:
         """Persist the collection.
@@ -580,4 +589,4 @@ class Chroma(VectorStore):
         Args:
             ids: List of ids to delete.
         """
-        self._collection.delete(ids=ids)
+        self._collection.delete(document_ids=ids)
